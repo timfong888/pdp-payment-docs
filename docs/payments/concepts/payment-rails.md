@@ -16,6 +16,62 @@ A Payment Rail is a smart contract-based payment channel that:
 4. **Provides security**: Locks funds to ensure payment obligations are met
 5. **Offers flexibility**: Allows for rate adjustments and termination conditions
 
+### Epoch Duration
+
+In the Filecoin network, one epoch is approximately **30 seconds** in clock time. This is a fundamental parameter in the system because:
+
+1. The `paymentRate` is specified as tokens per epoch
+2. The `lockupPeriod` is measured in epochs (e.g., 2880 epochs = 1 day)
+3. Settlement intervals and proof submission windows are measured in epochs
+
+When calculating costs and rates, this epoch duration must be considered:
+
+```javascript
+// Converting between time-based rates and epoch-based rates
+const dollarsPerMonth = 30.0;
+const secondsPerMonth = 30 * 24 * 60 * 60; // 30 days in seconds
+const secondsPerEpoch = 30; // 30 seconds per epoch
+const epochsPerMonth = secondsPerMonth / secondsPerEpoch; // ~86,400 epochs
+const dollarsPerEpoch = dollarsPerMonth / epochsPerMonth;
+```
+
+### Payment Rate Calculation
+
+The `paymentRate` parameter represents the rate at which funds flow from the client to the storage provider per epoch. This rate is typically calculated off-chain based on several factors:
+
+```javascript
+// Example of calculating payment rate based on data size and market factors
+function calculatePaymentRate(dataSize, storagePrice, epochsPerDay) {
+    // Convert data size to GB
+    const dataSizeGB = dataSize / (1024 * 1024 * 1024);
+    
+    // Calculate daily cost based on market price per GB
+    const dailyCost = dataSizeGB * storagePrice;
+    
+    // Convert to per-epoch rate
+    const paymentRate = ethers.utils.parseUnits(
+        (dailyCost / epochsPerDay).toFixed(6),
+        6
+    );
+    
+    return paymentRate;
+}
+
+// Usage example
+const dataSize = 5 * 1024 * 1024 * 1024; // 5 GB in bytes
+const storagePrice = 0.01; // $0.01 per GB per day
+const epochsPerDay = 2880; // 30-second epochs
+const rate = calculatePaymentRate(dataSize, storagePrice, epochsPerDay);
+```
+
+Factors that typically influence the payment rate include:
+
+1. **Data Size**: Larger data requires more storage resources
+2. **Storage Duration**: Longer commitments may have different pricing
+3. **Market Rates**: Competitive pricing based on current market conditions
+4. **Quality of Service**: Premium service levels may command higher rates
+5. **Network Conditions**: Network congestion and resource availability
+
 ### Rail Structure
 
 Each Payment Rail is represented by a data structure with the following components:
@@ -230,6 +286,52 @@ async function terminateRail(railId) {
     await payments.terminateRail(railId);
 }
 ```
+
+### 6. Rail Updates and Their Impact
+
+When a payment rail is modified using `modifyRailPayment`, it's important to understand:
+
+1. **What changes**: Typically the payment rate (`paymentRate`) is updated
+2. **What doesn't change**: Proof obligations, verification schedule, and data commitments remain the same
+3. **Settlement implications**: Any unsettled payments before the update use the old rate; payments after use the new rate
+
+#### Common Scenarios for Rail Updates
+
+1. **Data expansion**: When a client adds more data to be stored
+   ```javascript
+   // Example: Updating payment rate when data size increases
+   async function updateRailForNewData(railId, originalDataSize, newDataSize, originalRate) {
+       // Calculate new rate proportional to data increase
+       const dataRatio = newDataSize / originalDataSize;
+       const newRate = originalRate.mul(ethers.BigNumber.from(Math.floor(dataRatio * 100))).div(100);
+       
+       await payments.modifyRailPayment(railId, newRate, 0);
+   }
+   ```
+
+2. **Price adjustments**: Responding to market changes
+   ```javascript
+   // Example: Applying a price increase
+   async function applyPriceIncrease(railId, currentRate, percentIncrease) {
+       const newRate = currentRate.mul(100 + percentIncrease).div(100);
+       await payments.modifyRailPayment(railId, newRate, 0);
+   }
+   ```
+
+#### Relationship with PDP System
+
+Rail updates do not directly affect the PDP proof requirements:
+
+1. The storage provider must continue to submit proofs for all data
+2. The arbiter continues to evaluate proof compliance using the same criteria
+3. The payment amount that gets adjusted by the arbiter will be based on the new rate
+
+#### Best Practices for Rail Updates
+
+1. **Communicate changes**: Notify all parties before updating rails
+2. **Document justification**: Record the reason for rate changes
+3. **Settle before updates**: Consider settling payments before making rate changes
+4. **Verify after updates**: Confirm the new rate is correctly applied
 
 ## Integration with PDP
 
